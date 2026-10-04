@@ -87,6 +87,8 @@ url() {
 }
 
 set_arg() { sed -i "s|^ARG $1=.*|ARG $1=$2|" "$dockerfile"; }
+arg() { sed -n "s/^ARG $1=//p" "$dockerfile"; }
+old_tag="$(arg POSTGRESQL_VERSION).0-debian-12-r$(arg IMAGE_REVISION)"
 
 for name in POSTGRESQL GEOS PROJ GDAL JSONC ORAFCE PLJAVA UNIXODBC PSQLODBC PROTOBUF ABSEIL PROTOBUFC \
             POSTGIS PGAUDIT PGBACKREST PGVECTOR PGFAILOVERSLOTS WAL2JSON NSSWRAPPER; do
@@ -113,6 +115,14 @@ done
 
 revision="$(sed -nE 's/.*IMAGE_REVISION="([0-9]+)".*/\1/p' <<<"$theirs")"
 set_arg IMAGE_REVISION "$revision"
+
+# The README names the one tag that matches a Bitnami tag exactly; keep it current.
+new_tag="$(arg POSTGRESQL_VERSION).0-debian-12-r$revision"
+readme="$(dirname "$0")/../README.md"
+if [[ "$new_tag" != "$old_tag" ]] && grep -qF "\`$old_tag\`" "$readme"; then
+  sed -i "s/\`${old_tag//./\\.}\`/\`$new_tag\`/" "$readme"
+  echo "  README tag $old_tag -> $new_tag"
+fi
 
 # Their runtime package list is ours too.
 packages="$(grep -E '^RUN install_packages ' <<<"$theirs")"

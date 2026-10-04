@@ -4,10 +4,12 @@ on:
   push:
     branches: [main]
     paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE', '.github/assets/**', '.github/ISSUE_TEMPLATE/**',
-                   'action.yml', '.github/workflows/action-test.yml', '.github/workflows/sync.yml']
+                   'action.yml', '.github/workflows/action-test.yml', '.github/workflows/sync.yml',
+                   'scripts/sync-from-bitnami.sh']
   pull_request:
     paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE', '.github/assets/**', '.github/ISSUE_TEMPLATE/**',
-                   'action.yml', '.github/workflows/action-test.yml', '.github/workflows/sync.yml']
+                   'action.yml', '.github/workflows/action-test.yml', '.github/workflows/sync.yml',
+                   'scripts/sync-from-bitnami.sh']
   schedule:
     - cron: '23 4 * * 1' # weekly rebuild picks up Debian security updates
   workflow_dispatch:
@@ -66,12 +68,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Changes once a week, which reruns the runtime stage's apt layers (see DEBIAN_REFRESH).
+      - name: Week of the Debian package refresh
+        id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build from upstream source
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ env.IMAGE_DIR }}/Dockerfile
           platforms: linux/${{ matrix.arch }}
+          build-args: DEBIAN_REFRESH=${{ steps.week.outputs.week }}
           load: true
           tags: lifeboat/postgresql:ci
           cache-from: |
@@ -154,6 +162,7 @@ jobs:
           context: .
           file: ${{ env.IMAGE_DIR }}/Dockerfile
           platforms: linux/${{ matrix.arch }}
+          build-args: DEBIAN_REFRESH=${{ steps.week.outputs.week }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true

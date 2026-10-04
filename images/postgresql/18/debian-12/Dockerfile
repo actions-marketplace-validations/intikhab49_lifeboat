@@ -320,6 +320,9 @@ RUN psqlodbc_tag="$(IFS=. read -r a b c <<<"$PSQLODBC_VERSION"; printf 'REL-%02d
 FROM debian:bookworm-slim
 ARG TARGETARCH
 ARG POSTGRESQL_VERSION IMAGE_REVISION
+# CI passes the ISO week here, so the apt layers below run again every week and pick up Debian
+# security updates even while the bookworm-slim tag, and with it the layer cache, is unchanged.
+ARG DEBIAN_REFRESH
 
 LABEL org.opencontainers.image.base.name="docker.io/library/debian:bookworm-slim" \
       org.opencontainers.image.description="PostgreSQL built from upstream source with the layout of Bitnami's postgresql image. Not affiliated with Broadcom or Bitnami." \
