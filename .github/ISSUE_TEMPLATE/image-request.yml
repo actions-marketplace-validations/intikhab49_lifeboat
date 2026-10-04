@@ -1,0 +1,21 @@
+name: Rebuild another Bitnami image
+description: Ask for another Bitnami image to be rebuilt from upstream source.
+labels: [image request]
+body:
+  - type: input
+    id: image
+    attributes:
+      label: Which image?
+      placeholder: bitnami/redis
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions you need
+      placeholder: 7.4, 8.2
+  - type: textarea
+    id: use
+    attributes:
+      label: How do you use it?
+      description: docker-compose, Bitnami's Helm chart, CI service container, something else.

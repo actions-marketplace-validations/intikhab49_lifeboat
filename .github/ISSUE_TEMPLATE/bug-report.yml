@@ -1,0 +1,41 @@
+name: Bug report
+description: The image or the action does something you didn't expect.
+labels: [bug]
+body:
+  - type: input
+    id: image
+    attributes:
+      label: Image and tag
+      placeholder: ghcr.io/intikhab49/lifeboat/postgresql:18.6.0
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: How do you run it?
+      options:
+        - docker or docker-compose
+        - Bitnami Helm chart
+        - GitHub Action
+        - something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: bitnami
+    attributes:
+      label: Does Bitnami's image do the same?
+      description: >-
+        If you can still run bitnami/postgresql:latest or bitnamilegacy/postgresql, does it show the
+        same behavior? That tells us right away whether the difference is ours.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: docker logs output, or the failing step of your workflow.
+      render: shell

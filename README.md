@@ -1,8 +1,20 @@
-# lifeboat
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.png">
+  <img alt="lifeboat: Bitnami's PostgreSQL image, rebuilt from upstream source" src=".github/assets/banner-light.png">
+</picture>
 
-**Bitnami's PostgreSQL image, rebuilt from upstream source.** Same paths, scripts, environment
-variables and tags, so it drops into Bitnami's Helm chart and your compose files. Free to pull,
-amd64 and arm64, and none of its binaries come from Broadcom.
+[![build](https://github.com/intikhab49/lifeboat/actions/workflows/build.yml/badge.svg)](https://github.com/intikhab49/lifeboat/actions/workflows/build.yml)
+[![image](https://img.shields.io/badge/ghcr.io-lifeboat%2Fpostgresql-0e2a47?logo=docker&logoColor=white)](https://github.com/intikhab49/lifeboat/pkgs/container/lifeboat%2Fpostgresql)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18.6-336791?logo=postgresql&logoColor=white)](images/postgresql/18/debian-12/Dockerfile)
+[![arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-ff5b1f)](#tags)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
+**A drop-in replacement for `bitnami/postgresql`, rebuilt from upstream source.** Same paths,
+scripts, environment variables and tags, so it works with Bitnami's Helm chart, your
+docker-compose files and your CI. Free to pull, amd64 and arm64, with pgvector, PostGIS and 50+
+extensions, and none of its binaries come from Broadcom.
+
+[Use it](#use-it) · [GitHub Actions](#github-actions) · [Why from source](#why-not-just-build-bitnamis-dockerfile) · [How it's built](#how-its-built) · [The pgvector crash](#the-pgvector-crash-this-build-fixes) · [Proof](#proof-its-the-same-image) · [FAQ](#faq)
 
 If you are here because of this:
 
@@ -43,17 +55,56 @@ helm install db oci://registry-1.docker.io/bitnamicharts/postgresql \
   --set global.security.allowInsecureImages=true
 ```
 
-The last flag is needed because the chart blocks images it doesn't know with
-`Original containers have been substituted for unrecognized ones`.
+> [!NOTE]
+> The chart refuses images it doesn't know (`Original containers have been substituted for
+> unrecognized ones`), hence the last flag. CI installs the real chart in replication mode with
+> this image on every build.
+
+Every `POSTGRESQL_*` variable, `/docker-entrypoint-initdb.d`, the `/bitnami/postgresql` volume,
+UID 1001, replication mode and arbitrary-UID support (OpenShift) work the same way, because they
+are Bitnami's own scripts.
+
+### Tags
 
 | Tag | Meaning |
 |---|---|
 | `18.6.0-debian-12-r14` | same version, OS and scripts revision as Bitnami's tag of that name |
 | `18.6.0`, `18.6`, `18`, `latest` | moving tags, as on Bitnami |
 
-Every `POSTGRESQL_*` variable, `/docker-entrypoint-initdb.d`, the `/bitnami/postgresql` volume,
-UID 1001, replication mode and arbitrary-UID support (OpenShift) work the same way, because
-they are Bitnami's own scripts.
+## GitHub Actions
+
+As a step, with extensions ready to use:
+
+```yaml
+- uses: intikhab49/lifeboat@v1
+  id: pg
+  with:
+    extensions: vector, postgis
+- run: psql "${{ steps.pg.outputs.url }}" -c "select '[1,2,3]'::vector <-> '[4,5,6]'"
+```
+
+| Input | Default | What it does |
+|---|---|---|
+| `version` | `18` | image tag, for example `18.6.0` |
+| `port` | `5432` | host port |
+| `username`, `password`, `database` | `postgres` | `POSTGRESQL_USERNAME`, `POSTGRESQL_PASSWORD`, `POSTGRESQL_DATABASE` |
+| `extensions` | | created in that database, for example `vector, postgis` |
+| `shared-preload-libraries` | | for example `pgaudit,pg_stat_statements` |
+| `env` | | any other `POSTGRESQL_*` setting, one `KEY=VALUE` per line |
+| `container-name` | `postgresql` | for `docker logs` or `docker exec` later |
+
+Outputs: `url` (`postgresql://…`), `host`, `port`, `container`.
+
+Or as a service container, the way `bitnami/postgresql` used to be used:
+
+```yaml
+services:
+  postgres:
+    image: ghcr.io/intikhab49/lifeboat/postgresql:18
+    env:
+      POSTGRESQL_PASSWORD: postgres
+    ports: ['5432:5432']
+```
 
 ## Why not just build Bitnami's Dockerfile?
 
@@ -65,24 +116,41 @@ fork stops building.
 lifeboat compiles all of it from upstream source: PostgreSQL plus the 18 components Bitnami
 bundles with it (PostGIS, GDAL, GEOS, PROJ, pgvector, pgAudit, pgBackRest, orafce, PL/Java,
 psqlODBC, wal2json, pg_failover_slots, protobuf, nss_wrapper and the rest). Every source archive is
-pinned by SHA-256 in the [Dockerfile](images/postgresql/18/debian-12/Dockerfile).
+pinned by SHA-256 in the [Dockerfile](images/postgresql/18/debian-12/Dockerfile), and a daily job
+follows Bitnami's releases.
 
-## How the recipe was recovered
+## How it's built
 
-Bitnami's PostgreSQL package carries its own build log. The tarball on `downloads.bitnami.com` has a
-`BUILD.txt` with the exact sources, versions and `configure` flags, and `pg_config` inside the
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/how-it-is-built-dark.png">
+  <img alt="Read the recipe, fill the gaps, build from source, prove it matches" src=".github/assets/how-it-is-built-light.png">
+</picture>
+
+Bitnami's PostgreSQL package carries its own build log. The tarball on `downloads.bitnami.com`
+has a `BUILD.txt` with the exact sources, versions and `configure` flags, and `pg_config` inside the
 package records the build environment (`CC`, `LDFLAGS`, `CPPFLAGS`) that `BUILD.txt` leaves out.
-The binaries fill in the rest: the RUNPATH they share, the GCC version in `.comment`, and
-which files get stripped or deleted. The full walkthrough, with commands to check every claim, is in
+The binaries fill in the rest: the RUNPATH they share, the GCC version in `.comment`, and which
+files get stripped or deleted. The full walkthrough, with commands to check every claim, is in
 [docs/reverse-engineering.md](docs/reverse-engineering.md).
 
-## A bug this build fixes
+## The pgvector crash this build fixes
 
 Bitnami compiles pgvector with `-march=native`, the default in pgvector's Makefile that its own
-comment says to turn off for portable builds. Their `vector.so` only runs on CPUs like their build
-servers. PostgreSQL itself runs on every CPU in the table below; pgvector does not. On amd64 even
-`CREATE EXTENSION vector` kills the backend, and the server drops every other connection while it
-recovers:
+comment says to turn off for portable builds, so their `vector.so` only runs on CPUs like their
+build servers. PostgreSQL itself runs on every CPU below. pgvector does not:
+
+| CPU (QEMU model) | PostgreSQL | Bitnami's pgvector | lifeboat's pgvector |
+|---|---|---|---|
+| amd64 Nehalem, no AVX | runs | **illegal instruction** at `CREATE EXTENSION vector` | runs |
+| amd64 Sandy Bridge, AVX without AVX2 | runs | **illegal instruction** | runs |
+| amd64 Haswell, AVX2 without AVX-512 | runs | **illegal instruction** building an HNSW index | runs |
+| arm64 Cortex-A53, A72 (Raspberry Pi 3, 4 class) | runs | **illegal instruction** | runs |
+
+The Haswell row is the one that matters: in Bitnami's build, building an HNSW index, pgvector's
+main index, crashes on a CPU with AVX2 but no AVX-512. AMD CPUs before Zen 4 and Intel Core chips
+from the 12th generation on have no AVX-512 either. On a GitHub Actions amd64 runner, Bitnami's
+image crashed in this repo's HNSW test while lifeboat's passed. That includes the image you can still pull, `docker.io/bitnami/postgresql:latest`
+(built 2026-10-02). When a backend dies this way, the server drops every other connection too:
 
 ```
 LOG:  client backend (PID 52) was terminated by signal 4: Illegal instruction
@@ -90,18 +158,7 @@ LOG:  terminating any other active server processes
 LOG:  all server processes terminated; reinitializing
 ```
 
-| CPU (QEMU model) | PostgreSQL | Bitnami's pgvector | lifeboat's pgvector |
-|---|---|---|---|
-| amd64 Nehalem, no AVX | runs | **illegal instruction** | runs |
-| amd64 Sandy Bridge, AVX without AVX2/FMA | runs | **illegal instruction** | runs |
-| amd64 Haswell, AVX2 and FMA | runs | runs | runs |
-| arm64 Cortex-A53 (Raspberry Pi 3 class) | runs | **illegal instruction** | runs |
-| arm64 Cortex-A72 (Raspberry Pi 4 class) | runs | **illegal instruction** | runs |
-
-That includes the image you can still pull: `docker.io/bitnami/postgresql:latest` (built
-2026-10-02, Photon OS) crashes the same way on both amd64 models. Older Intel chips, many Celeron
-and Atom NAS boxes, VMs whose CPU type hides AVX2, and ARM boards without FP16 are affected. Check
-any copy with `scripts/cpu-compat.sh IMAGE`.
+Check any copy with `scripts/cpu-compat.sh IMAGE`.
 
 ## Proof it's the same image
 
@@ -111,7 +168,7 @@ compares the two. Results for 18.6.0 on amd64, checked on 2026-10-04:
 | Check | Result |
 |---|---|
 | Container config: env, user, entrypoint, command, ports, volumes | identical |
-| Behavior, 76 checks: env-var setup, init scripts, all 56 extensions, PostGIS build info, pgvector HNSW, wal2json, restart, arbitrary UID, streaming replication | identical (CI fails if not) |
+| Behavior, 76 checks: env-var setup, init scripts, all 56 extensions, PostGIS build info, pgvector HNSW, wal2json, restart, arbitrary UID, streaming replication | identical, on CPUs where Bitnami's pgvector runs |
 | Extensions and their versions | 56 of 56 identical |
 | GDAL formats | 121 of 121 identical |
 | Libraries linked by each of the 196 binaries and shared libraries | identical |
@@ -137,21 +194,33 @@ The ones that change how something is built are marked `Deviation:` in the Docke
 
 ## FAQ
 
+**`bitnami/postgresql:<version>` says "not found" or "manifest unknown". What happened?** Broadcom
+deleted the versioned tags in 2025. Point the same setup at
+`ghcr.io/intikhab49/lifeboat/postgresql:<version>`; the environment variables and volume paths
+don't change.
+
+**My Bitnami PostgreSQL chart is stuck in `ImagePullBackOff`.** Same cause. Override
+`image.registry`, `image.repository` and `image.tag` as shown in [Use it](#use-it), plus
+`global.security.allowInsecureImages=true`.
+
+**pgvector crashes with "Illegal instruction" or "signal 4".** That is the `-march=native` build
+described [above](#the-pgvector-crash-this-build-fixes). This image builds it portably.
+
+**Can I keep using `bitnamilegacy/postgresql`?** It works, but it has been frozen since August
+2025, so nothing fixed since then has reached it.
+
 **Is this Bitnami's image?** No. It runs Bitnami's Apache-2.0 container scripts, unmodified, on
 top of components built here. Not affiliated with Broadcom or Bitnami.
 
 **How do I verify an image?** Every tag carries SLSA build provenance and an SBOM:
 `gh attestation verify oci://ghcr.io/intikhab49/lifeboat/postgresql:18.6.0 --owner intikhab49`
 
-**Does it get updates?** It is rebuilt every week, which picks up Debian security fixes. Version
-bumps land as pull requests that must pass the CPU and behavior checks, with the parity report
-attached.
-
-**Can I keep using `bitnamilegacy/postgresql`?** It works, but it has been frozen since August
-2025, so nothing fixed since then has reached it.
+**Does it get updates?** It is rebuilt every week, which picks up Debian security fixes. When
+Bitnami ships a new revision, a daily job opens a pull request with the new versions, which must
+pass the CPU and behavior checks.
 
 **What about Redis, MongoDB, Kafka and the others?** PostgreSQL is first. The same method works
-for any image whose package ships a `BUILD.txt`.
+for any image whose package ships a `BUILD.txt`. [Ask for one](https://github.com/intikhab49/lifeboat/issues/new?template=image-request.yml).
 
 ## License
 

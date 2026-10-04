@@ -104,10 +104,21 @@ query, then pgvector queries:
 
 | CPU model (amd64) | PostgreSQL | Bitnami's pgvector | pgvector built with `OPTFLAGS=""` |
 |---|---|---|---|
-| host (Core i5-1135G7) | pass | pass | pass |
+| host (Core i5-1135G7, has AVX-512) | pass | pass | pass |
 | Nehalem (no AVX) | pass | **SIGILL** (illegal instruction) | pass |
 | SandyBridge (AVX, no AVX2/FMA) | pass | **SIGILL** | pass |
-| Haswell (AVX2, FMA) | pass | pass | pass |
+| Haswell (AVX2 and FMA, no AVX-512) | pass | **SIGILL** building an HNSW index | pass |
+
+The Haswell row was found by CI, not by the first round of tests, which only ran pgvector's
+functions. Its first run built Bitnami's image and lifeboat's on a GitHub Actions amd64 runner and
+ran the same behavior checks on both. Bitnami's backend died in the HNSW step ("connection to server
+was lost", then "the database system is in recovery mode"), and lifeboat's passed. Building an HNSW
+index on QEMU's Haswell model, which has AVX2 but no AVX-512, reproduces it with
+`uncaught target signal 4 (Illegal instruction)`. The model lacks AVX-512 and the extensions that
+came after Haswell; the likely culprit is AVX-512, since Bitnami's `vector.so` contains 21 `zmm`
+instructions. AMD CPUs before Zen 4 and Intel Core chips from the 12th generation on lack AVX-512
+as well, so on many of today's servers and desktops Bitnami's pgvector installs but crashes when it
+builds an HNSW index. The build job now logs the runner's CPU model so this is on record.
 
 | CPU model (arm64) | PostgreSQL | Bitnami's pgvector | pgvector built with `OPTFLAGS=""` |
 |---|---|---|---|

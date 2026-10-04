@@ -3,9 +3,11 @@ name: build
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE', '.github/assets/**', '.github/ISSUE_TEMPLATE/**',
+                   'action.yml', '.github/workflows/action-test.yml', '.github/workflows/sync.yml']
   pull_request:
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE', '.github/assets/**', '.github/ISSUE_TEMPLATE/**',
+                   'action.yml', '.github/workflows/action-test.yml', '.github/workflows/sync.yml']
   schedule:
     - cron: '23 4 * * 1' # weekly rebuild picks up Debian security updates
   workflow_dispatch:
@@ -38,6 +40,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
+
+      - name: Runner CPU
+        run: |
+          grep -m1 -E 'model name|^CPU part' /proc/cpuinfo || true
+          for f in avx2 fma avx512f fphp asimdhp; do grep -qw "$f" /proc/cpuinfo && printf '%s ' "$f"; done; echo
 
       # The build cache lives in GHCR: the compiler stages of two architectures outgrow the
       # 10 GB Actions cache. Pull requests read it anonymously and skip writing it.
@@ -88,8 +95,14 @@ jobs:
           bash scripts/smoke-postgresql.sh bitnami-reference/postgresql:ci > reference.transcript
           { echo; echo '## Behavior diff'; echo '```diff'; diff -u reference.transcript candidate.transcript || true; echo '```'; } >> parity/report.md
           cat parity/report.md >> "$GITHUB_STEP_SUMMARY"
-          # Same scripts from the same upstream commit, so any behavior difference is a regression.
-          diff -q reference.transcript candidate.transcript
+          # Same scripts from the same upstream commit, so once Bitnami's image passes its own run,
+          # any difference is a regression here. When it doesn't (its pgvector needs AVX-512, which
+          # many runners lack), the diff is reported instead.
+          if grep -qx 'failures: 0' reference.transcript; then
+            diff -q reference.transcript candidate.transcript
+          else
+            echo "::warning::Bitnami's image failed its own behavior checks on this runner ($(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)); see the report."
+          fi
 
       - name: What a scanner sees (Trivy)
         if: steps.reference.outcome == 'success'

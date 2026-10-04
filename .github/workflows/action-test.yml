@@ -1,9 +1,12 @@
 name: action test
 
 on:
-  push:
+  # After every successful image build on main, so the action is tested against what was just
+  # published; also on changes to the action itself.
+  workflow_run:
+    workflows: [build]
+    types: [completed]
     branches: [main]
-    paths: [action.yml, .github/workflows/action-test.yml]
   pull_request:
     paths: [action.yml, .github/workflows/action-test.yml]
   workflow_dispatch:
@@ -13,6 +16,7 @@ permissions:
 
 jobs:
   defaults:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -28,6 +32,7 @@ jobs:
           psql "$URL" -XtAc 'select postgis_lib_version()'
 
   custom-user:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

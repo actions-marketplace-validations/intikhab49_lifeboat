@@ -44,7 +44,13 @@ pgvector="CREATE EXTENSION IF NOT EXISTS vector;
 SELECT ('[1,2,3]'::vector <-> '[4,5,6]')::numeric(10,4) AS l2;
 SELECT cosine_distance('[1,2,3]'::vector, '[3,2,1]')::numeric(10,4) AS cosine;
 SELECT l2_normalize('[3,4]'::vector) AS normalized;
-SELECT ('[1,2,3]'::halfvec <-> '[4,5,6]'::halfvec)::numeric(10,4) AS l2_half;"
+SELECT ('[1,2,3]'::halfvec <-> '[4,5,6]'::halfvec)::numeric(10,4) AS l2_half;
+DROP TABLE IF EXISTS cc_items;
+CREATE TABLE cc_items (id int, e vector(3));
+INSERT INTO cc_items SELECT g, ARRAY[g, g % 7, g % 3]::vector FROM generate_series(1, 300) g;
+CREATE INDEX ON cc_items USING hnsw (e vector_l2_ops);
+CREATE INDEX ON cc_items USING ivfflat (e vector_l2_ops) WITH (lists = 4);
+SELECT 'built' AS indexes;"
 
 failed=0
 check() { # check CPU NAME SQL EXPECTED...
@@ -59,12 +65,13 @@ check() { # check CPU NAME SQL EXPECTED...
   else
     failed=1
     printf 'FAIL  %-11s %s  exit=%s  %s\n' "$cpu" "$name" "$rc" \
-      "$(grep -m1 -oE 'uncaught target signal [0-9]+ \([^)]*\)|ERROR: .*' <<<"$out" || echo "missing: $missing")"
+      "$(grep -m1 -oE 'uncaught target signal [0-9]+ \([^)]*\)' <<<"$out" || grep -m1 -oE 'ERROR: .*' <<<"$out" \
+         || echo "missing: $missing")"
   fi
 }
 for cpu in native $CPUS; do
   check "$cpu" postgres "$baseline" 'baseline = "ok"'
-  check "$cpu" pgvector "$pgvector" 'normalized = "[0.6,0.8]"' 'l2_half = "5.1962"'
+  check "$cpu" pgvector "$pgvector" 'normalized = "[0.6,0.8]"' 'l2_half = "5.1962"' 'indexes = "built"'
 done
 exit "$failed"
 EOS
