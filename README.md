@@ -163,16 +163,18 @@ Check any copy with `scripts/cpu-compat.sh IMAGE`.
 ## Proof it's the same image
 
 Every CI run also builds Bitnami's own image from the same `bitnami/containers` commit and
-compares the two. Results for 18.6.0 on amd64, checked on 2026-10-04:
+compares the two. Results for 18.6.0 on amd64, from the run of 2026-10-04:
 
 | Check | Result |
 |---|---|
 | Container config: env, user, entrypoint, command, ports, volumes | identical |
-| Behavior, 76 checks: env-var setup, init scripts, all 56 extensions, PostGIS build info, pgvector HNSW, wal2json, restart, arbitrary UID, streaming replication | identical, on CPUs where Bitnami's pgvector runs |
+| Behavior, 76 checks: env-var setup, init scripts, all 56 extensions, PostGIS build info, pgvector HNSW, wal2json, restart, arbitrary UID, streaming replication | identical (on a CPU with AVX-512, where Bitnami's pgvector runs) |
 | Extensions and their versions | 56 of 56 identical |
 | GDAL formats | 121 of 121 identical |
-| Libraries linked by each of the 196 binaries and shared libraries | identical |
-| Unresolved libraries | none in either image |
+| All 196 binaries and shared libraries: linked libraries and RUNPATH | identical |
+| `pg_config` build flags, tool versions, file modes | identical |
+| Components Trivy finds | the same 18, plus Abseil |
+| Bitnami's Helm chart 18.12.4, primary and read replica | runs, replicates |
 
 Each run's summary on the Actions tab has the full file-level diff and the components Trivy finds
 in both images. Every difference that remains is listed below.
