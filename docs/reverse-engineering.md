@@ -18,13 +18,15 @@ commands in [Reproduce](#reproduce).
 
 ## 1. The recipe ships inside the package
 
-Each component tarball carries two files that the Dockerfile's `--strip-components=2` throws away:
+The PostgreSQL package carries its own recipe in two files:
 
-- `BUILD.txt` at the tarball root: the build image (`bitnami/minideb:bookworm`), the apt build
-  dependencies, and every download, `configure`/`cmake`/`meson` call and `make` in order, ending
-  with the list of files it strips.
-- `files/postgresql/.spdx-postgresql.json`: an SPDX SBOM listing the bundled packages with versions
-  and download locations.
+- `BUILD.txt` at the tarball root, which the Dockerfile's `--strip-components=2` throws away. It
+  lists the build image (`bitnami/minideb:bookworm`), the apt build dependencies, and every
+  download, `configure`/`cmake`/`meson` call and `make` in order, ending with the list of files it
+  strips.
+- `files/postgresql/.spdx-postgresql.spdx`, which does reach the image. It is an SPDX SBOM listing
+  the bundled packages with versions and download locations. The nss_wrapper package has only
+  this file, no `BUILD.txt`.
 
 The two packages hold 19 upstream projects. The 52 MB `postgresql-18.6.0-14` package bundles 18
 of them, and nss_wrapper ships on its own:
@@ -72,8 +74,8 @@ how the image finds its bundled libraries without `LD_LIBRARY_PATH`.
 `GCC: (Debian 12.2.0-14+deb12u1) 12.2.0`, the stock Debian 12 compiler.
 
 **The packaging rules.** Comparing the tarball with a plain `make install` shows the post-processing:
-no libtool `.la` files, no static libraries except PostgreSQL's own six `libpg*.a`, every ELF file
-stripped, and one license file per component under `licenses/`.
+no libtool `.la` files, no static libraries except PostgreSQL's own six `libpg*.a`, no man pages or
+docs, every ELF file stripped, and one license file per component under `licenses/`.
 
 **The base image.** `bitnami/minideb:bookworm` is Debian 12 with an `install_packages` helper. The
 helper is already in the Dockerfile's `prebuildfs`, so the official `debian:bookworm-slim` works
@@ -90,11 +92,12 @@ pgvector's Makefile defaults to `OPTFLAGS = -march=native` and says so:
 OPTFLAGS = -march=native
 ```
 
-BUILD.txt runs `make USE_PGXS=1 --jobs=5`, with no override. The result is a `vector.so` that uses
-whatever instructions Bitnami's build host had, outside of any runtime CPU check. On amd64 it uses
-AVX2 and FMA in ordinary exported functions (`cosine_distance`, `l2_normalize`, `vector_norm`, the
-IVFFlat index handler). On arm64 it uses ARMv8.2 half-precision arithmetic (`fadd v0.8h`,
-`fabs h0`) in the halfvec functions, including the input parser `halfvec_in`.
+BUILD.txt runs `make USE_PGXS=1 --jobs=5`, with no override, so the compiler targets whatever CPU
+Bitnami's build host had, everywhere in the library rather than behind runtime CPU checks. In the
+amd64 disassembly, AVX and FMA instructions sit in the code of ordinary exported functions such as
+`cosine_distance`, `l2_normalize` and `vector_norm`. The arm64 build uses ARMv8.2 half-precision
+arithmetic (`fadd v0.8h`, `fabs h0`) in the halfvec functions, including the input parser
+`halfvec_in`.
 
 `scripts/cpu-compat.sh` runs PostgreSQL in single-user mode on QEMU CPU models. First a plain
 query, then pgvector queries:
@@ -115,8 +118,9 @@ query, then pgvector queries:
 The last column is Bitnami's own image with only `vector.so` rebuilt from the same source with the
 same compiler. Nothing else changed, so the crash is pgvector's build flag.
 
-It fails at the first step. On the Nehalem model, `CREATE EXTENSION vector` alone dies with SIGILL,
-so the extension cannot even be installed. In a running server that takes everyone else down too.
+It fails at the first step. On the Nehalem model, `CREATE EXTENSION vector` alone dies with SIGILL
+(tested on `docker.io/bitnami/postgresql:latest`), so the extension cannot even be installed. In a
+running server that takes everyone else down too.
 A second, idle connection is dropped while the server recovers:
 
 ```
@@ -141,8 +145,8 @@ calls it in eight files. Built exactly as BUILD.txt says, against protobuf 36.2,
 with `'const class google::protobuf::FieldDescriptor' has no member named 'label'`. Bitnami's
 package nevertheless ships a working `protoc-c` that reports `libprotoc 36.2` and links protobuf
 statically, so their build applies a patch that BUILD.txt does not mention. lifeboat applies
-[protobuf-c pull request #797](https://github.com/protobuf-c/protobuf-c/pull/797), the fix distro
-packagers use, vendored with its source commit in
+[protobuf-c pull request #797](https://github.com/protobuf-c/protobuf-c/pull/797), the fix Alpine's
+packager wrote, vendored with its source commit in
 `images/postgresql/18/debian-12/patches/`. The lesson: BUILD.txt is most of the recipe, not all of
 it, and only a full build proves the rest.
 
@@ -153,8 +157,15 @@ it, and only a full build proves the rest.
 - **Sources are not verified.** BUILD.txt fetches every source with plain `curl` and no checksum.
   lifeboat pins a SHA-256 for all 19 archives. For PostgreSQL the pin matches the checksum
   postgresql.org publishes.
-- **License files are thin.** Six of the 15 files in `postgresql/licenses/` are empty or one SPDX
-  line. lifeboat ships the upstream license texts.
+- **License files are thin.** Eight of them, including GPL-licensed PostGIS and LGPL-licensed GEOS,
+  are one line naming the license, such as `MIT: https://spdx.org/licenses/MIT.html`, instead of
+  the license text. lifeboat ships the upstream license texts.
+- **The SBOM has errors.** The package's SPDX file (created by `Tool: Blacksmith-6.67.2`, Bitnami's
+  builder) tags protobuf with `cpe:2.3:*:golang:protobuf`, the Go library. NVD files C++ protobuf
+  CVEs such as CVE-2022-1941 under `google:protobuf-cpp`, so CPE matching misses them. It also
+  labels psqlODBC `LGPL-3.0-only`, while its sources say "either version 2 of the License, or (at
+  your option) any later version". And Abseil, compiled into `protoc`, is not listed. lifeboat
+  writes the same SPDX files at the same paths, with those three fixed.
 - **PL/Java ships without a JVM**, so `CREATE EXTENSION pljava` fails in both images with
   `cannot use PL/Java before successfully completing its setup`.
 - **wal2json needs to be allowed on 18.6.** PostgreSQL 18.6 only accepts `pgoutput` and
@@ -163,7 +174,7 @@ it, and only a full build proves the rest.
 
 ## 4. Deviations in lifeboat
 
-Each one is marked `Deviation:` in the Dockerfile.
+The ones that change how something is built are marked `Deviation:` in the Dockerfile.
 
 | What | Bitnami | lifeboat | Why |
 |---|---|---|---|
@@ -175,6 +186,7 @@ Each one is marked `Deviation:` in the Dockerfile.
 | protobuf-c | an unlisted patch | protobuf-c PR #797, vendored | builds against protobuf 36.2 |
 | Runtime base | `bitnami/minideb:bookworm` | `debian:bookworm-slim` | no Broadcom-hosted base |
 | Licenses | some empty | upstream texts, Abseil added | Abseil is compiled into `protoc` |
+| SPDX files | 3 errors (above) | same paths, errors fixed, supplier lifeboat | scanners read them |
 | Startup banner | "Welcome to the Bitnami postgresql container" | names lifeboat | not Bitnami's image |
 
 ## Reproduce

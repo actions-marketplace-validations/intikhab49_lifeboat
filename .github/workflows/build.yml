@@ -78,6 +78,22 @@ jobs:
           bash scripts/smoke-postgresql.sh bitnami-reference/postgresql:ci > reference.transcript
           { echo; echo '## Behavior diff'; echo '```diff'; diff -u reference.transcript candidate.transcript || true; echo '```'; } >> parity/report.md
           cat parity/report.md >> "$GITHUB_STEP_SUMMARY"
+          # Same scripts from the same upstream commit, so any behavior difference is a regression.
+          diff -q reference.transcript candidate.transcript
+
+      - name: What a scanner sees (Trivy)
+        if: steps.reference.outcome == 'success'
+        continue-on-error: true
+        run: |
+          for side in reference candidate; do
+            image=bitnami-reference/postgresql:ci
+            [[ $side == candidate ]] && image=lifeboat/postgresql:ci
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.75.0 image --quiet \
+              --scanners vuln --pkg-types library --list-all-pkgs --format json "$image" \
+              | jq -r '.Results[]? | select(.Type == "bitnami") | .Packages[]? | "\(.Name) \(.Version)"' | sort > "trivy-$side.txt"
+          done
+          { echo; echo "## Components Trivy finds ($(wc -l < trivy-reference.txt) in Bitnami's, $(wc -l < trivy-candidate.txt) in lifeboat's)"
+            echo '```diff'; diff -u trivy-reference.txt trivy-candidate.txt || true; echo '```'; } | tee -a parity/report.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         if: always()
@@ -86,6 +102,7 @@ jobs:
           path: |
             parity/report.md
             *.transcript
+            trivy-*.txt
           if-no-files-found: ignore
 
       - name: Push by digest

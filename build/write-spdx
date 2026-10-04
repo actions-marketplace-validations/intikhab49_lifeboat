@@ -1,0 +1,44 @@
+#!/bin/bash
+# write-spdx FILE TITLE ARCH: writes an SPDX 2.3 JSON document shaped like the ones Bitnami ships at
+# /opt/bitnami/<prefix>/.spdx-<name>.spdx, so scanners that read those files (Trivy, for one) still
+# see every bundled component and its version.
+# Reads one component per line on stdin, the main package first:
+#   name<TAB>version<TAB>SPDX license<TAB>CPE vendor:product, or -<TAB>source URL
+set -euo pipefail
+
+file="$1" title="$2" arch="$3"
+mapfile -t rows
+[[ ${#rows[@]} -gt 0 ]] || { echo "write-spdx: no components on stdin" >&2; exit 1; }
+main="${rows[0]%%$'\t'*}"
+
+package() {
+  local name version license cpe url refs
+  IFS=$'\t' read -r name version license cpe url <<<"$1"
+  refs="{\"referenceCategory\":\"PACKAGE-MANAGER\",\"referenceType\":\"purl\",\"referenceLocator\":\"pkg:bitnami/${name}@${version}?arch=${arch}&distro=debian-12\"}"
+  if [[ "$cpe" != - ]]; then
+    refs="{\"referenceCategory\":\"SECURITY\",\"referenceType\":\"cpe23Type\",\"referenceLocator\":\"cpe:2.3:a:${cpe}:${version}:*:*:*:*:*:*:*\"},$refs"
+  fi
+  printf '{"SPDXID":"SPDXRef-%s","name":"%s","versionInfo":"%s","downloadLocation":"%s","licenseConcluded":"%s","licenseDeclared":"%s","supplier":"Organization: lifeboat","originator":"Organization: upstream","primaryPackagePurpose":"LIBRARY","filesAnalyzed":false,"externalRefs":[%s],"copyrightText":"NOASSERTION"}' \
+    "$name" "$name" "$version" "$url" "$license" "$license" "$refs"
+}
+
+{
+  printf '{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT",'
+  printf '"name":"SPDX document for %s","documentNamespace":"https://github.com/intikhab49/lifeboat/spdx/%s-%s",' \
+    "$title" "${title// /-}" "$arch"
+  printf '"creationInfo":{"created":"%s","creators":["Organization: lifeboat","Tool: lifeboat"]},' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '"documentDescribes":["SPDXRef-%s"],"packages":[' "$main"
+  for i in "${!rows[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    package "${rows[$i]}"
+  done
+  printf '],"relationships":['
+  for i in "${!rows[@]}"; do
+    [[ $i -eq 0 ]] && continue
+    [[ $i -gt 1 ]] && printf ','
+    printf '{"spdxElementId":"SPDXRef-%s","relationshipType":"CONTAINS","relatedSpdxElement":"SPDXRef-%s"}' \
+      "$main" "${rows[$i]%%$'\t'*}"
+  done
+  printf ']}\n'
+} > "$file"

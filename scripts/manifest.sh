@@ -57,7 +57,8 @@ echo "## versions"
   # sed/grep read their whole input; head would close the pipe early (SIGPIPE, exit 141).
   "$pg_bin/proj" 2>&1 | sed -n 1p
   /opt/bitnami/protobuf/bin/protoc --version
-  /opt/bitnami/common/bin/protoc-c --version 2>&1 | grep -v '^WARNING: All log messages'
+  # protoc-c also logs a timestamped Abseil warning, which would differ on every run.
+  /opt/bitnami/common/bin/protoc-c --version 2>&1 | grep -vE '^WARNING: All log messages|^W[0-9]{4} '
   echo "unixodbc $(/opt/bitnami/common/bin/odbc_config --version)"
 } 2>&1
 

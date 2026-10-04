@@ -75,9 +75,10 @@ FROM build-base AS postgresql
 ARG POSTGRESQL_VERSION POSTGRESQL_SHA256 BUILD_JOBS
 # Deviation: the official release tarball, whose checksum postgresql.org publishes, instead of a
 # GitHub archive of the git tag. Same code; the tarball also carries the generated parser files.
+# pg_config records the build environment, and Bitnami's has no PKG_CONFIG_PATH in it.
 RUN fetch "https://ftp.postgresql.org/pub/source/v${POSTGRESQL_VERSION}/postgresql-${POSTGRESQL_VERSION}.tar.bz2" "$POSTGRESQL_SHA256" /src \
  && cd /src \
- && ./configure --prefix=/opt/bitnami/postgresql --with-libedit-preferred --with-openssl --with-libxml \
+ && env -u PKG_CONFIG_PATH ./configure --prefix=/opt/bitnami/postgresql --with-libedit-preferred --with-openssl --with-libxml \
       --with-libxslt --with-readline --with-icu --with-uuid=e2fs --with-ldap CFLAGS=-O2 CXXFLAGS=-O2 --with-lz4 \
  && make world-bin --jobs="$BUILD_JOBS" \
  && make install-world-bin \
@@ -95,9 +96,11 @@ RUN fetch "https://download.osgeo.org/geos/geos-${GEOS_VERSION}.tar.bz2" "$GEOS_
 FROM build-base AS proj
 ARG PROJ_VERSION PROJ_SHA256 BUILD_JOBS
 # Deviation: the release tarball ships a generated configure script, so autogen.sh is not needed.
+# Bitnami's PROJ was linked without the global flags: its programs carry only libtool's
+# RUNPATH=/opt/bitnami/postgresql/lib and libproj.so none.
 RUN fetch "https://download.osgeo.org/proj/proj-${PROJ_VERSION}.tar.gz" "$PROJ_SHA256" /src \
  && cd /src \
- && ./configure --prefix=/opt/bitnami/postgresql \
+ && env -u LDFLAGS -u CPPFLAGS ./configure --prefix=/opt/bitnami/postgresql \
  && make --jobs="$BUILD_JOBS" \
  && make install \
  && collect-licenses /src "/opt/bitnami/postgresql/licenses/proj-${PROJ_VERSION}.txt"
@@ -150,7 +153,8 @@ FROM build-base AS protobuf-c
 ARG PROTOBUFC_VERSION PROTOBUFC_SHA256 BUILD_JOBS
 COPY --from=protobuf /opt/bitnami /opt/bitnami
 # BUILD.txt lists no patch, but protobuf-c 1.5.2 does not compile against protobuf 36.2 without
-# one (FieldDescriptor::label() is gone); see the header of the patch file.
+# one (FieldDescriptor::label() is gone); see the header of the patch file. Like PROJ, Bitnami's
+# protobuf-c was linked without the global flags (no RUNPATH).
 COPY images/postgresql/18/debian-12/patches/protobuf-c-1.5.2-protobuf34.patch /tmp/
 RUN apt-get -o Acquire::Retries=5 update \
  && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends patch \
@@ -158,7 +162,7 @@ RUN apt-get -o Acquire::Retries=5 update \
 RUN fetch "https://github.com/protobuf-c/protobuf-c/releases/download/v${PROTOBUFC_VERSION}/protobuf-c-${PROTOBUFC_VERSION}.tar.gz" "$PROTOBUFC_SHA256" /src \
  && patch -d /src -p1 < /tmp/protobuf-c-1.5.2-protobuf34.patch \
  && cd /src \
- && ./configure --prefix=/opt/bitnami/common \
+ && env -u LDFLAGS -u CPPFLAGS ./configure --prefix=/opt/bitnami/common \
  && make --jobs="$BUILD_JOBS" \
  && make install \
  && collect-licenses /src "/opt/bitnami/common/licenses/protobuf-c-${PROTOBUFC_VERSION}.txt"
@@ -244,15 +248,20 @@ RUN fetch "https://github.com/eulerto/wal2json/archive/refs/tags/wal2json_${WAL2
 
 FROM build-base AS nss-wrapper
 ARG NSSWRAPPER_VERSION NSSWRAPPER_SHA256 BUILD_JOBS
+# nss_wrapper is a separate Bitnami package; its library's RUNPATH names only its own prefix.
 RUN fetch "https://ftp.samba.org/pub/cwrap/nss_wrapper-${NSSWRAPPER_VERSION}.tar.gz" "$NSSWRAPPER_SHA256" /src \
- && cmake -S /src -B /build -DCMAKE_INSTALL_PREFIX=/opt/bitnami/common -DCMAKE_INSTALL_LIBDIR=lib \
+ && LDFLAGS="-Wl,-rpath=/opt/bitnami/common/lib -L/opt/bitnami/common/lib" CPPFLAGS="-I/opt/bitnami/common/include" \
+    cmake -S /src -B /build -DCMAKE_INSTALL_PREFIX=/opt/bitnami/common -DCMAKE_INSTALL_LIBDIR=lib \
       -DCMAKE_BUILD_TYPE=Release \
  && make -C /build --jobs="$BUILD_JOBS" \
  && make -C /build install \
  && collect-licenses /src "/opt/bitnami/common/licenses/nss-wrapper-${NSSWRAPPER_VERSION}.txt"
 
 FROM build-base AS assemble
-ARG POSTGIS_VERSION
+ARG TARGETARCH POSTGRESQL_VERSION GEOS_VERSION PROJ_VERSION GDAL_VERSION JSONC_VERSION JSONC_DATE ORAFCE_VERSION \
+    PLJAVA_VERSION UNIXODBC_VERSION PSQLODBC_VERSION PROTOBUF_VERSION ABSEIL_VERSION PROTOBUFC_VERSION \
+    POSTGIS_VERSION PGAUDIT_VERSION PGBACKREST_VERSION PGVECTOR_VERSION PGFAILOVERSLOTS_VERSION \
+    WAL2JSON_VERSION NSSWRAPPER_VERSION
 COPY --from=postgresql /opt/bitnami /opt/bitnami
 COPY --from=gdal /opt/bitnami /opt/bitnami
 COPY --from=json-c /opt/bitnami /opt/bitnami
@@ -265,11 +274,45 @@ COPY --from=pgbackrest /opt/bitnami /opt/bitnami
 COPY --from=extensions /opt/bitnami /opt/bitnami
 COPY --from=nss-wrapper /opt/bitnami /opt/bitnami
 # Packaged like Bitnami's component: no libtool archives, no static libraries besides
-# PostgreSQL's own libpg*.a, every ELF file stripped.
+# PostgreSQL's own libpg*.a, no man pages or docs, executables writable by their owner, every
+# ELF file stripped.
 RUN find /opt/bitnami \( -name '*.la' -o \( -name '*.a' ! -name 'libpg*.a' \) \) -delete \
+ && rm -rf /opt/bitnami/*/share/man /opt/bitnami/*/share/doc \
+ && find /opt/bitnami -type f -perm -u+x ! -perm -u+w -exec chmod u+w {} + \
  && find /opt/bitnami -type f -exec sh -c 'for f; do if file -b "$f" | grep -q "^ELF"; then strip "$f"; fi; done' sh {} + \
  && printf 'postgis-%s,GPL-2.0-or-later,https://download.osgeo.org/postgis/source/postgis-%s.tar.gz\n' \
       "$POSTGIS_VERSION" "$POSTGIS_VERSION" > /opt/bitnami/postgresql/licenses/gpl-source-links.txt
+# The SPDX documents Bitnami ships, rewritten for what was built here, so scanners that read them
+# (Trivy, for one) still see every bundled component. Deviation: Bitnami's tag protobuf with the
+# Go library's CPE (golang:protobuf) and psqlODBC as LGPL-3.0-only; its sources say
+# LGPL-2.0-or-later. Abseil, compiled into protoc, is listed too.
+COPY --chmod=0755 build/write-spdx /usr/local/bin/
+RUN psqlodbc_tag="$(IFS=. read -r a b c <<<"$PSQLODBC_VERSION"; printf 'REL-%02d_%02d_%04d' "$a" "$b" "$c")" \
+ && printf '%s\t%s\t%s\t%s\t%s\n' \
+      postgresql "${POSTGRESQL_VERSION}.0" PostgreSQL postgresql:postgresql "https://ftp.postgresql.org/pub/source/v${POSTGRESQL_VERSION}/postgresql-${POSTGRESQL_VERSION}.tar.bz2" \
+      geos "$GEOS_VERSION" LGPL-2.1-only libgeos:geos "https://download.osgeo.org/geos/geos-${GEOS_VERSION}.tar.bz2" \
+      proj "$PROJ_VERSION" MIT proj:proj "https://download.osgeo.org/proj/proj-${PROJ_VERSION}.tar.gz" \
+      gdal "$GDAL_VERSION" MIT osgeo:gdal "https://github.com/OSGeo/gdal/releases/download/v${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz" \
+      json-c "${JSONC_VERSION}.${JSONC_DATE}" MIT json-c_project:json-c "https://github.com/json-c/json-c/archive/refs/tags/json-c-${JSONC_VERSION}-${JSONC_DATE}.tar.gz" \
+      orafce "$ORAFCE_VERSION" 0BSD orafce:orafce "https://github.com/orafce/orafce/archive/refs/tags/VERSION_${ORAFCE_VERSION//./_}.tar.gz" \
+      pljava "$PLJAVA_VERSION" BSD-3-Clause - "https://github.com/tada/pljava/archive/refs/tags/V${PLJAVA_VERSION//./_}.tar.gz" \
+      unixodbc "$UNIXODBC_VERSION" LGPL-2.1-only unixodbc:unixodbc "https://www.unixodbc.org/unixODBC-${UNIXODBC_VERSION}.tar.gz" \
+      psqlodbc "$PSQLODBC_VERSION" LGPL-2.0-or-later postgresql:psqlodbc "https://github.com/postgresql-interfaces/psqlodbc/archive/refs/tags/${psqlodbc_tag}.tar.gz" \
+      protobuf "${PROTOBUF_VERSION}.0" BSD-3-Clause google:protobuf-cpp "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protobuf-${PROTOBUF_VERSION}.tar.gz" \
+      abseil-cpp "$ABSEIL_VERSION" Apache-2.0 - "https://github.com/abseil/abseil-cpp/releases/download/${ABSEIL_VERSION}/abseil-cpp-${ABSEIL_VERSION}.tar.gz" \
+      protobuf-c "$PROTOBUFC_VERSION" BSD-2-Clause protobuf-c:protobuf-c "https://github.com/protobuf-c/protobuf-c/releases/download/v${PROTOBUFC_VERSION}/protobuf-c-${PROTOBUFC_VERSION}.tar.gz" \
+      postgis "$POSTGIS_VERSION" GPL-2.0-or-later postgis:postgis "https://download.osgeo.org/postgis/source/postgis-${POSTGIS_VERSION}.tar.gz" \
+      pgaudit "${PGAUDIT_VERSION}.0" PostgreSQL - "https://github.com/pgaudit/pgaudit/archive/refs/tags/${PGAUDIT_VERSION}.tar.gz" \
+      pgbackrest "$PGBACKREST_VERSION" MIT pgbackrest:pgbackrest "https://github.com/pgbackrest/pgbackrest/releases/download/release/${PGBACKREST_VERSION}/pgbackrest-${PGBACKREST_VERSION}.tar.gz" \
+      pgvector "$PGVECTOR_VERSION" PostgreSQL pgvector:pgvector "https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTOR_VERSION}.tar.gz" \
+      pg-failover-slots "$PGFAILOVERSLOTS_VERSION" PostgreSQL pg-failover-slots:pg-failover-slots "https://github.com/EnterpriseDB/pg_failover_slots/archive/refs/tags/v${PGFAILOVERSLOTS_VERSION}.tar.gz" \
+      wal2json "${WAL2JSON_VERSION}.0" BSD-3-Clause wal2json:wal2json "https://github.com/eulerto/wal2json/archive/refs/tags/wal2json_${WAL2JSON_VERSION//./_}.tar.gz" \
+    | write-spdx /opt/bitnami/postgresql/.spdx-postgresql.spdx "PostgreSQL ${POSTGRESQL_VERSION}.0" "$TARGETARCH" \
+ && ln -s /opt/bitnami/postgresql/.spdx-postgresql.spdx /opt/bitnami/postgresql/.spdx-postgresql.json \
+ && printf '%s\t%s\t%s\t%s\t%s\n' \
+      nss-wrapper "$NSSWRAPPER_VERSION" BSD-3-Clause nss-wrapper:nss-wrapper "https://ftp.samba.org/pub/cwrap/nss_wrapper-${NSSWRAPPER_VERSION}.tar.gz" \
+    | write-spdx /opt/bitnami/common/.spdx-nss-wrapper.spdx "NSS Wrapper ${NSSWRAPPER_VERSION}" "$TARGETARCH" \
+ && ln -s /opt/bitnami/common/.spdx-nss-wrapper.spdx /opt/bitnami/common/.spdx-nss-wrapper.json
 
 # Deviation: the official Debian 12 image instead of bitnami/minideb, so the base does not come
 # from Broadcom either. Bitnami's prebuildfs supplies the same install_packages helper.
