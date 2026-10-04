@@ -4,6 +4,7 @@
 </picture>
 
 [![build](https://github.com/intikhab49/lifeboat/actions/workflows/build.yml/badge.svg)](https://github.com/intikhab49/lifeboat/actions/workflows/build.yml)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-lifeboat-ff5b1f?logo=github)](https://github.com/marketplace/actions/postgresql-with-pgvector-and-postgis-lifeboat)
 [![image](https://img.shields.io/badge/ghcr.io-lifeboat%2Fpostgresql-0e2a47?logo=docker&logoColor=white)](https://github.com/intikhab49/lifeboat/pkgs/container/lifeboat%2Fpostgresql)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18.6-336791?logo=postgresql&logoColor=white)](images/postgresql/18/debian-12/Dockerfile)
 [![arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-ff5b1f)](#tags)

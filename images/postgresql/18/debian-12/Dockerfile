@@ -278,6 +278,7 @@ COPY --from=nss-wrapper /opt/bitnami /opt/bitnami
 # ELF file stripped.
 RUN find /opt/bitnami \( -name '*.la' -o \( -name '*.a' ! -name 'libpg*.a' \) \) -delete \
  && rm -rf /opt/bitnami/*/share/man /opt/bitnami/*/share/doc \
+ && { rmdir --ignore-fail-on-non-empty /opt/bitnami/*/share 2>/dev/null || true; } \
  && find /opt/bitnami -type f -perm -u+x ! -perm -u+w -exec chmod u+w {} + \
  && find /opt/bitnami -type f -exec sh -c 'for f; do if file -b "$f" | grep -q "^ELF"; then strip "$f"; fi; done' sh {} + \
  && printf 'postgis-%s,GPL-2.0-or-later,https://download.osgeo.org/postgis/source/postgis-%s.tar.gz\n' \
