@@ -1,0 +1,50 @@
+name: sync with Bitnami
+
+on:
+  schedule:
+    - cron: '41 5 * * *' # daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  postgresql-18:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sync with Bitnami's latest release
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/sync-from-bitnami.sh images/postgresql/18/debian-12 | tee sync.log
+          if [[ -n "$(git status --porcelain)" ]]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Open a pull request
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIR: images/postgresql/18/debian-12
+        run: |
+          commit="$(sed -n 's/^commit=//p' "$IMAGE_DIR/UPSTREAM")"
+          version="$(sed -n 's/^ARG POSTGRESQL_VERSION=//p' "$IMAGE_DIR/Dockerfile")"
+          revision="$(sed -n 's/^ARG IMAGE_REVISION=//p' "$IMAGE_DIR/Dockerfile")"
+          branch="sync/postgresql-18-${commit:0:12}"
+          title="postgresql 18: sync with Bitnami ${version}.0-debian-12-r${revision}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists"; exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add -A "$IMAGE_DIR"
+          git commit -m "$title"
+          git push origin "$branch"
+          printf 'Automated sync from bitnami/containers@%s.\n\n```\n%s\n```\n' "$commit" "$(cat sync.log)" > body.md
+          gh pr create --base main --head "$branch" --title "$title" --body-file body.md
+          # Pull requests opened with GITHUB_TOKEN start no workflows, so start the checks here.
+          gh workflow run build.yml --ref "$branch"

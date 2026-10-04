@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /images/postgresql/18/debian-12
+    schedule:
+      interval: weekly

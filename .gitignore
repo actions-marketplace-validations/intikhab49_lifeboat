@@ -1,0 +1,4 @@
+parity/
+parity-report/
+*.transcript
+*.manifest

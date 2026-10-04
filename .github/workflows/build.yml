@@ -1,0 +1,158 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'NOTICE']
+  schedule:
+    - cron: '23 4 * * 1' # weekly rebuild picks up Debian security updates
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_DIR: images/postgresql/18/debian-12
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/lifeboat/postgresql
+
+jobs:
+  build:
+    name: postgresql 18 (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      # The build cache lives in GHCR: the compiler stages of two architectures outgrow the
+      # 10 GB Actions cache. Pull requests read it anonymously and skip writing it.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build from upstream source
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ env.IMAGE_DIR }}/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: lifeboat/postgresql:ci
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}-cache:18-${{ matrix.arch }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}-cache:18-{1},mode=max,ignore-error=true', env.IMAGE_NAME, matrix.arch) || '' }}
+
+      - name: pgvector runs on older CPUs
+        run: bash scripts/cpu-compat.sh lifeboat/postgresql:ci
+
+      - name: Behavior (env vars, init scripts, extensions, nss_wrapper, replication)
+        run: bash scripts/smoke-postgresql.sh lifeboat/postgresql:ci | tee candidate.transcript
+
+      - name: Build Bitnami's image as the reference
+        id: reference
+        continue-on-error: true # needs downloads.bitnami.com, which Broadcom can close at any time
+        run: bash scripts/build-reference.sh "$IMAGE_DIR" bitnami-reference/postgresql:ci
+
+      - name: Parity with Bitnami's image
+        if: steps.reference.outcome == 'success'
+        run: |
+          bash scripts/parity.sh bitnami-reference/postgresql:ci lifeboat/postgresql:ci parity
+          bash scripts/smoke-postgresql.sh bitnami-reference/postgresql:ci > reference.transcript
+          { echo; echo '## Behavior diff'; echo '```diff'; diff -u reference.transcript candidate.transcript || true; echo '```'; } >> parity/report.md
+          cat parity/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: parity-${{ matrix.arch }}
+          path: |
+            parity/report.md
+            *.transcript
+          if-no-files-found: ignore
+
+      - name: Push by digest
+        id: push
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !github.event.repository.private
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ env.IMAGE_DIR }}/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}-cache:18-${{ matrix.arch }}
+
+      - name: Export digest
+        if: steps.push.outcome == 'success'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.push.outcome == 'success'
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+
+  publish:
+    name: publish multi-arch tags
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !github.event.repository.private
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the multi-arch image
+        id: tags
+        run: |
+          version="$(sed -n 's/^ARG POSTGRESQL_VERSION=//p' "$IMAGE_DIR/Dockerfile")"
+          revision="$(sed -n 's/^ARG IMAGE_REVISION=//p' "$IMAGE_DIR/Dockerfile")"
+          tags=("$version.0" "$version" "${version%%.*}" "$version.0-debian-12-r$revision" latest)
+          args=()
+          for t in "${tags[@]}"; do args+=(-t "$IMAGE_NAME:$t"); done
+          docker buildx imagetools create "${args[@]}" $(printf "$IMAGE_NAME@sha256:%s " $(ls digests))
+          digest="$(docker buildx imagetools inspect "$IMAGE_NAME:$version.0" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.tags.outputs.digest }}
+          push-to-registry: true

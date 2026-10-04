@@ -1,0 +1,15 @@
+#!/bin/bash
+# fetch URL SHA256 DIR: download a source archive, verify its pinned checksum, unpack it into DIR.
+set -euo pipefail
+
+url="$1" sha256="$2" dir="$3"
+archive="$(mktemp)"
+curl -fsSL --retry 3 --retry-delay 5 -o "$archive" "$url"
+if ! echo "$sha256  $archive" | sha256sum --check --quiet - ; then
+  echo "fetch: checksum mismatch for $url" >&2
+  echo "fetch: expected $sha256, got $(sha256sum "$archive" | cut -d' ' -f1)" >&2
+  exit 1
+fi
+mkdir -p "$dir"
+tar -xf "$archive" -C "$dir" --strip-components=1 --no-same-owner
+rm -f "$archive"

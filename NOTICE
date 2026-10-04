@@ -1,0 +1,26 @@
+lifeboat
+Copyright 2026 the lifeboat authors
+
+The build files, tests and documentation in this repository are licensed under the Apache
+License, Version 2.0 (see LICENSE).
+
+This repository also vendors container scripts from https://github.com/bitnami/containers,
+under the Apache License, Version 2.0:
+
+    Copyright Broadcom, Inc. All Rights Reserved.
+    SPDX-License-Identifier: APACHE-2.0
+
+They live in the prebuildfs/ and rootfs/ directories of each image, unmodified. The only change
+is made at build time and is marked "Deviation:" in the Dockerfile: the startup banner names
+this project instead of Bitnami. Each image directory has an UPSTREAM file with the exact
+source commit.
+
+Images built from this repository contain third-party software under its own licenses,
+including PostgreSQL (PostgreSQL License), PostGIS (GPL-2.0-or-later), GDAL, GEOS, PROJ,
+protobuf, Abseil, unixODBC (LGPL-2.1), psqlODBC (LGPL-2.0), pgBackRest, pgvector, pgAudit,
+orafce, PL/Java, pg_failover_slots, wal2json, json-c, protobuf-c and nss_wrapper. Each image
+carries their license texts under /opt/bitnami/*/licenses/. Every component is built from the
+source archive listed, with its SHA-256, in that image's Dockerfile.
+
+Bitnami is a trademark of Broadcom Inc. This project is not affiliated with, endorsed by or
+sponsored by Broadcom or Bitnami. The name is used only to describe compatibility.

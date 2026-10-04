@@ -1,0 +1,18 @@
+#!/bin/bash
+# collect-licenses SRC_DIR DEST_FILE: copy a source tree's top-level license texts into one file.
+# Fails when none are found, so a component never ships without its license.
+set -euo pipefail
+
+src="$1" dest="$2"
+mapfile -t files < <(find "$src" -maxdepth 1 -type f \
+  \( -iname 'copying*' -o -iname 'copyright*' -o -iname 'license*' -o -iname 'licence*' \) | LC_ALL=C sort)
+if [[ ${#files[@]} -eq 0 ]]; then
+  echo "collect-licenses: no license file in $src" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$dest")"
+for f in "${files[@]}"; do
+  printf '==> %s <==\n' "$(basename "$f")"
+  cat "$f"
+  printf '\n'
+done > "$dest"
