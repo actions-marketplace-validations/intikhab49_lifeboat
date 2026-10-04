@@ -1,0 +1,52 @@
+name: action test
+
+on:
+  push:
+    branches: [main]
+    paths: [action.yml, .github/workflows/action-test.yml]
+  pull_request:
+    paths: [action.yml, .github/workflows/action-test.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  defaults:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - id: pg
+        uses: ./
+        with:
+          extensions: vector, postgis
+      - name: pgvector and PostGIS answer
+        env:
+          URL: ${{ steps.pg.outputs.url }}
+        run: |
+          test "$(psql "$URL" -XtAc "select '[1,2,3]'::vector <-> '[4,5,6]'")" = 5.196152422706632
+          psql "$URL" -XtAc 'select postgis_lib_version()'
+
+  custom-user:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - id: pg
+        uses: ./
+        with:
+          version: 18.6.0
+          port: '5433'
+          username: app
+          password: app-secret
+          database: appdb
+          extensions: pg_stat_statements
+          shared-preload-libraries: pgaudit,pg_stat_statements
+          env: |
+            POSTGRESQL_WAL_LEVEL=logical
+      - name: User, database and settings took effect
+        env:
+          URL: ${{ steps.pg.outputs.url }}
+        run: |
+          test "$(psql "$URL" -XtAc 'select current_user || current_database()')" = appappdb
+          test "$(psql "$URL" -XtAc 'show wal_level')" = logical
+          psql "$URL" -XtAc 'select count(*) >= 0 from pg_stat_statements'

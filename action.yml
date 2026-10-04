@@ -1,0 +1,131 @@
+name: PostgreSQL with pgvector and PostGIS (lifeboat)
+description: "Run PostgreSQL 18 with pgvector, PostGIS and 50+ extensions in CI. Drop-in for bitnami/postgresql, built from source."
+author: intikhab49
+branding:
+  icon: database
+  color: orange
+inputs:
+  version:
+    description: Image tag, for example 18, 18.6 or 18.6.0. Pin a full version for reproducible builds.
+    required: false
+    default: '18'
+  port:
+    description: Host port PostgreSQL listens on.
+    required: false
+    default: '5432'
+  username:
+    description: User to create (POSTGRESQL_USERNAME). The default is the postgres superuser.
+    required: false
+    default: postgres
+  password:
+    description: Password for that user (POSTGRESQL_PASSWORD), also set for postgres when the user differs.
+    required: false
+    default: postgres
+  database:
+    description: Database to create (POSTGRESQL_DATABASE).
+    required: false
+    default: postgres
+  extensions:
+    description: Extensions to create in that database, separated by spaces or commas, for example "vector, postgis".
+    required: false
+    default: ''
+  shared-preload-libraries:
+    description: Libraries loaded at server start (POSTGRESQL_SHARED_PRELOAD_LIBRARIES), for example "pgaudit,pg_stat_statements".
+    required: false
+    default: ''
+  env:
+    description: Any other POSTGRESQL_* settings the image supports, one KEY=VALUE per line.
+    required: false
+    default: ''
+  container-name:
+    description: Name of the Docker container, for docker logs or docker exec in later steps.
+    required: false
+    default: postgresql
+outputs:
+  url:
+    description: Connection URL, for example postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    value: ${{ steps.start.outputs.url }}
+  host:
+    description: Host to connect to.
+    value: ${{ steps.start.outputs.host }}
+  port:
+    description: Port to connect to.
+    value: ${{ steps.start.outputs.port }}
+  container:
+    description: Name of the running container.
+    value: ${{ steps.start.outputs.container }}
+runs:
+  using: composite
+  steps:
+    - id: start
+      name: Start PostgreSQL
+      shell: bash
+      env:
+        LB_VERSION: ${{ inputs.version }}
+        LB_PORT: ${{ inputs.port }}
+        LB_USER: ${{ inputs.username }}
+        LB_PASSWORD: ${{ inputs.password }}
+        LB_DATABASE: ${{ inputs.database }}
+        LB_EXTENSIONS: ${{ inputs.extensions }}
+        LB_PRELOAD: ${{ inputs.shared-preload-libraries }}
+        LB_ENV: ${{ inputs.env }}
+        LB_NAME: ${{ inputs.container-name }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" != "Linux" ]; then
+          echo "::error::lifeboat needs a Linux runner with Docker, for example ubuntu-latest."
+          exit 1
+        fi
+        echo "::add-mask::$LB_PASSWORD"
+        image="ghcr.io/intikhab49/lifeboat/postgresql:$LB_VERSION"
+        docker pull --quiet "$image" >/dev/null
+
+        args=(-d --name "$LB_NAME" -p "$LB_PORT:5432"
+              -e POSTGRESQL_USERNAME="$LB_USER" -e POSTGRESQL_PASSWORD="$LB_PASSWORD"
+              -e POSTGRESQL_DATABASE="$LB_DATABASE")
+        if [ "$LB_USER" != "postgres" ]; then
+          args+=(-e POSTGRESQL_POSTGRES_PASSWORD="$LB_PASSWORD")
+        fi
+        if [ -n "$LB_PRELOAD" ]; then
+          args+=(-e POSTGRESQL_SHARED_PRELOAD_LIBRARIES="$LB_PRELOAD")
+        fi
+        while IFS= read -r line; do
+          line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          if [ -n "$line" ]; then args+=(-e "$line"); fi
+        done <<< "$LB_ENV"
+        docker run "${args[@]}" "$image" >/dev/null
+
+        ready=""
+        for _ in $(seq 1 120); do
+          if docker logs "$LB_NAME" 2>&1 | grep -q 'Starting PostgreSQL \*\*' \
+             && docker exec "$LB_NAME" pg_isready -h 127.0.0.1 -p 5432 -U postgres -q; then
+            ready=1
+            break
+          fi
+          if [ "$(docker inspect -f '{{.State.Running}}' "$LB_NAME")" != "true" ]; then
+            break
+          fi
+          sleep 1
+        done
+        if [ -z "$ready" ]; then
+          docker logs "$LB_NAME" || true
+          echo "::error::PostgreSQL did not become ready within 120 seconds."
+          exit 1
+        fi
+
+        psql_super() {
+          docker exec -e PGPASSWORD="$LB_PASSWORD" "$LB_NAME" \
+            psql -h 127.0.0.1 -U postgres -d "$LB_DATABASE" -v ON_ERROR_STOP=1 -XqAt -c "$1"
+        }
+        for ext in $(printf '%s' "$LB_EXTENSIONS" | tr ',' ' '); do
+          psql_super "CREATE EXTENSION IF NOT EXISTS \"$ext\" CASCADE"
+          echo "extension $ext: $(psql_super "SELECT extversion FROM pg_extension WHERE extname = '$ext'")"
+        done
+        echo "PostgreSQL $(psql_super 'SHOW server_version') is up at 127.0.0.1:$LB_PORT ($image)"
+
+        {
+          echo "url=postgresql://$LB_USER:$LB_PASSWORD@127.0.0.1:$LB_PORT/$LB_DATABASE"
+          echo "host=127.0.0.1"
+          echo "port=$LB_PORT"
+          echo "container=$LB_NAME"
+        } >> "$GITHUB_OUTPUT"

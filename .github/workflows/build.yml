@@ -66,6 +66,16 @@ jobs:
       - name: Behavior (env vars, init scripts, extensions, nss_wrapper, replication)
         run: bash scripts/smoke-postgresql.sh lifeboat/postgresql:ci | tee candidate.transcript
 
+      - name: Start a kind cluster
+        if: matrix.arch == 'amd64'
+        uses: helm/kind-action@v1.15.0
+        with:
+          cluster_name: chart
+
+      - name: Bitnami's Helm chart runs this image (primary and read replica)
+        if: matrix.arch == 'amd64'
+        run: bash scripts/chart-test.sh lifeboat/postgresql:ci chart
+
       - name: Build Bitnami's image as the reference
         id: reference
         continue-on-error: true # needs downloads.bitnami.com, which Broadcom can close at any time
