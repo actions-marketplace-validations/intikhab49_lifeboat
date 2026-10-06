@@ -1,17 +1,18 @@
-# PostgreSQL 17 with the same layout as Bitnami's postgresql image (paths, scripts, environment
-# variables, extensions), built entirely from upstream source. Nothing comes from
+# PostgreSQL 18 with repmgr, in the layout of Bitnami's postgresql-repmgr image (paths, scripts,
+# environment variables, extensions), built entirely from upstream source. Nothing comes from
 # downloads.bitnami.com.
 #
-# Bitnami stopped publishing PostgreSQL 17 in 2025. This builds the current 17 point release with
-# the scripts and the recipe of its last public release, postgresql-17.6.0-7 (17.6.0-debian-12-r10); see UPSTREAM.
-# The shared components match the 18 image, and docs/reverse-engineering.md walks through the
-# recipe. Every deliberate difference from it is marked "Deviation:".
+# Bitnami's postgresql-repmgr-18.6.0-17 package was built from the same BUILD.txt recipe as its
+# postgresql package, plus repmgr (linked against libcurl and json-c), so every stage before the
+# repmgr one is identical to images/postgresql/18/debian-12/Dockerfile and shares its build cache;
+# scripts/align-majors.sh keeps the pins equal. Every deliberate difference from Bitnami's recipe
+# is marked "Deviation:".
 #
 # Build from the repository root:
-#   docker build -f images/postgresql/17/debian-12/Dockerfile -t lifeboat/postgresql:17.11.0 .
+#   docker build -f images/postgresql-repmgr/18/debian-12/Dockerfile -t lifeboat/postgresql-repmgr:18.6.0 .
 
-ARG POSTGRESQL_VERSION=17.11
-ARG POSTGRESQL_SHA256=dd27f2b3c59e73ed14aa3324901242bf69a032a6347805f274e6260322d42979
+ARG POSTGRESQL_VERSION=18.6
+ARG POSTGRESQL_SHA256=555610c24d53e4316da5b7d3fc25c279d96856d5e0e23ee308c328c5fa881d9f
 ARG GEOS_VERSION=3.15.0
 ARG GEOS_SHA256=d5e5192a686d065eaed082de14dd26244c5c8e02bff16b2c6cce3265f648e00e
 ARG PROJ_VERSION=6.3.2
@@ -37,8 +38,8 @@ ARG PROTOBUFC_VERSION=1.5.2
 ARG PROTOBUFC_SHA256=e2c86271873a79c92b58fef7ebf8de1aa0df4738347a8bd5d4e65a80a16d0d24
 ARG POSTGIS_VERSION=3.6.4
 ARG POSTGIS_SHA256=ed8dc6679f1e06f7b113592b04cde2a7e00f1b1e681294c8ca2204058990cec6
-ARG PGAUDIT_VERSION=17.1
-ARG PGAUDIT_SHA256=9c5f37504d393486cc75d2ced83f75f5899be64fa85f689d6babb833b4361e6c
+ARG PGAUDIT_VERSION=18.0
+ARG PGAUDIT_SHA256=988e8afeda320ebe0a3e632ef6b6bce5d3a08346c2e100a173a585c9521d1fa5
 ARG PGBACKREST_VERSION=2.59.3
 ARG PGBACKREST_SHA256=14037901db002e5536a948bf9f0fc0ff6cde31f4e675d3e9b46f129071bf2e5f
 ARG PGVECTOR_VERSION=0.8.7
@@ -49,8 +50,10 @@ ARG WAL2JSON_VERSION=2.6
 ARG WAL2JSON_SHA256=18b4bdec28c74a8fc98a11c72de38378a760327ef8e5e42e975b0029eb96ba0d
 ARG NSSWRAPPER_VERSION=1.1.16
 ARG NSSWRAPPER_SHA256=dc79ab072779be4403b45b60cd044dd13780d4bb9675d27abf1932ada7c8a88d
+ARG REPMGR_VERSION=5.5.0
+ARG REPMGR_SHA256=73504f5281e2918151ac906d4ae29479e343b28003270a7eddc282800f1b3f84
 # Revision of Bitnami's image whose scripts are vendored next to this file (see UPSTREAM).
-ARG IMAGE_REVISION=10
+ARG IMAGE_REVISION=18
 ARG BUILD_JOBS=4
 
 FROM debian:bookworm AS build-base
@@ -156,7 +159,7 @@ COPY --from=protobuf /opt/bitnami /opt/bitnami
 # BUILD.txt lists no patch, but protobuf-c 1.5.2 does not compile against protobuf 36.2 without
 # one (FieldDescriptor::label() is gone); see the header of the patch file. Like PROJ, Bitnami's
 # protobuf-c was linked without the global flags (no RUNPATH).
-COPY images/postgresql/17/debian-12/patches/protobuf-c-1.5.2-protobuf34.patch /tmp/
+COPY images/postgresql/18/debian-12/patches/protobuf-c-1.5.2-protobuf34.patch /tmp/
 RUN apt-get -o Acquire::Retries=5 update \
  && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends patch \
  && rm -rf /var/lib/apt/lists/*
@@ -258,11 +261,30 @@ RUN fetch "https://ftp.samba.org/pub/cwrap/nss_wrapper-${NSSWRAPPER_VERSION}.tar
  && make -C /build install \
  && collect-licenses /src "/opt/bitnami/common/licenses/nss-wrapper-${NSSWRAPPER_VERSION}.txt"
 
+FROM build-base AS repmgr
+ARG REPMGR_VERSION REPMGR_SHA256 BUILD_JOBS
+RUN apt-get -o Acquire::Retries=5 update \
+ && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends libcurl4-openssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=postgresql /opt/bitnami /opt/bitnami
+COPY --from=json-c /opt/bitnami /opt/bitnami
+# Deviation: repmgr.org no longer serves the tarball (404), so it comes from the EnterpriseDB/repmgr
+# GitHub release; the file has the same SHA-256 as GitHub's archive of the v5.5.0 tag.
+# PGXS installs the programs next to PostgreSQL's; Bitnami's package has them in /opt/bitnami/repmgr.
+RUN fetch "https://github.com/EnterpriseDB/repmgr/releases/download/v${REPMGR_VERSION}/repmgr-${REPMGR_VERSION}.tar.gz" "$REPMGR_SHA256" /src \
+ && cd /src \
+ && ./configure --prefix=/opt/bitnami/repmgr \
+ && make --jobs="$BUILD_JOBS" \
+ && make install \
+ && mkdir -p /opt/bitnami/repmgr/bin \
+ && mv /opt/bitnami/postgresql/bin/repmgr /opt/bitnami/postgresql/bin/repmgrd /opt/bitnami/repmgr/bin/ \
+ && collect-licenses /src "/opt/bitnami/repmgr/licenses/repmgr-${REPMGR_VERSION}.txt"
+
 FROM build-base AS assemble
 ARG TARGETARCH POSTGRESQL_VERSION GEOS_VERSION PROJ_VERSION GDAL_VERSION JSONC_VERSION JSONC_DATE ORAFCE_VERSION \
     PLJAVA_VERSION UNIXODBC_VERSION PSQLODBC_VERSION PROTOBUF_VERSION ABSEIL_VERSION PROTOBUFC_VERSION \
     POSTGIS_VERSION PGAUDIT_VERSION PGBACKREST_VERSION PGVECTOR_VERSION PGFAILOVERSLOTS_VERSION \
-    WAL2JSON_VERSION NSSWRAPPER_VERSION
+    WAL2JSON_VERSION NSSWRAPPER_VERSION REPMGR_VERSION
 COPY --from=postgresql /opt/bitnami /opt/bitnami
 COPY --from=gdal /opt/bitnami /opt/bitnami
 COPY --from=json-c /opt/bitnami /opt/bitnami
@@ -274,6 +296,7 @@ COPY --from=psqlodbc /opt/bitnami /opt/bitnami
 COPY --from=pgbackrest /opt/bitnami /opt/bitnami
 COPY --from=extensions /opt/bitnami /opt/bitnami
 COPY --from=nss-wrapper /opt/bitnami /opt/bitnami
+COPY --from=repmgr /opt/bitnami /opt/bitnami
 # Packaged like Bitnami's component: no libtool archives, no static libraries besides
 # PostgreSQL's own libpg*.a, no man pages or docs, executables writable by their owner, every
 # ELF file stripped.
@@ -283,19 +306,23 @@ RUN find /opt/bitnami \( -name '*.la' -o \( -name '*.a' ! -name 'libpg*.a' \) \)
  && find /opt/bitnami -type f -perm -u+x ! -perm -u+w -exec chmod u+w {} + \
  && find /opt/bitnami -type f -exec sh -c 'for f; do if file -b "$f" | grep -q "^ELF"; then strip "$f"; fi; done' sh {} + \
  && printf 'postgis-%s,GPL-2.0-or-later,https://download.osgeo.org/postgis/source/postgis-%s.tar.gz\n' \
-      "$POSTGIS_VERSION" "$POSTGIS_VERSION" > /opt/bitnami/postgresql/licenses/gpl-source-links.txt
+      "$POSTGIS_VERSION" "$POSTGIS_VERSION" > /opt/bitnami/postgresql/licenses/gpl-source-links.txt \
+ && printf 'repmgr-%s,GPL-3.0-or-later,https://github.com/EnterpriseDB/repmgr/releases/download/v%s/repmgr-%s.tar.gz\n' \
+      "$REPMGR_VERSION" "$REPMGR_VERSION" "$REPMGR_VERSION" > /opt/bitnami/repmgr/licenses/gpl-source-links.txt
 # The SPDX documents Bitnami ships, rewritten for what was built here, so scanners that read them
 # (Trivy, for one) still see every bundled component. Deviation: Bitnami's tag protobuf with the
 # Go library's CPE (golang:protobuf) and psqlODBC as LGPL-3.0-only; its sources say
-# LGPL-2.0-or-later. Abseil, compiled into protoc, is listed too.
+# LGPL-2.0-or-later, and repmgr as GPL-3.0-only; its COPYRIGHT says GPL-3.0-or-later. Abseil,
+# compiled into protoc, is listed too. Bitnami names the document after the image.
 COPY --chmod=0755 build/write-spdx /usr/local/bin/
 RUN psqlodbc_tag="$(IFS=. read -r a b c <<<"$PSQLODBC_VERSION"; printf 'REL-%02d_%02d_%04d' "$a" "$b" "$c")" \
  && printf '%s\t%s\t%s\t%s\t%s\n' \
-      postgresql "${POSTGRESQL_VERSION}.0" PostgreSQL postgresql:postgresql "https://ftp.postgresql.org/pub/source/v${POSTGRESQL_VERSION}/postgresql-${POSTGRESQL_VERSION}.tar.bz2" \
+      postgresql-repmgr "${POSTGRESQL_VERSION}.0" PostgreSQL postgresql:postgresql "https://ftp.postgresql.org/pub/source/v${POSTGRESQL_VERSION}/postgresql-${POSTGRESQL_VERSION}.tar.bz2" \
       geos "$GEOS_VERSION" LGPL-2.1-only libgeos:geos "https://download.osgeo.org/geos/geos-${GEOS_VERSION}.tar.bz2" \
       proj "$PROJ_VERSION" MIT proj:proj "https://download.osgeo.org/proj/proj-${PROJ_VERSION}.tar.gz" \
       gdal "$GDAL_VERSION" MIT osgeo:gdal "https://github.com/OSGeo/gdal/releases/download/v${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz" \
       json-c "${JSONC_VERSION}.${JSONC_DATE}" MIT json-c_project:json-c "https://github.com/json-c/json-c/archive/refs/tags/json-c-${JSONC_VERSION}-${JSONC_DATE}.tar.gz" \
+      repmgr "$REPMGR_VERSION" GPL-3.0-or-later repmgr:repmgr "https://github.com/EnterpriseDB/repmgr/releases/download/v${REPMGR_VERSION}/repmgr-${REPMGR_VERSION}.tar.gz" \
       orafce "$ORAFCE_VERSION" 0BSD orafce:orafce "https://github.com/orafce/orafce/archive/refs/tags/VERSION_${ORAFCE_VERSION//./_}.tar.gz" \
       pljava "$PLJAVA_VERSION" BSD-3-Clause - "https://github.com/tada/pljava/archive/refs/tags/V${PLJAVA_VERSION//./_}.tar.gz" \
       unixodbc "$UNIXODBC_VERSION" LGPL-2.1-only unixodbc:unixodbc "https://www.unixodbc.org/unixODBC-${UNIXODBC_VERSION}.tar.gz" \
@@ -309,8 +336,8 @@ RUN psqlodbc_tag="$(IFS=. read -r a b c <<<"$PSQLODBC_VERSION"; printf 'REL-%02d
       pgvector "$PGVECTOR_VERSION" PostgreSQL pgvector:pgvector "https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTOR_VERSION}.tar.gz" \
       pg-failover-slots "$PGFAILOVERSLOTS_VERSION" PostgreSQL pg-failover-slots:pg-failover-slots "https://github.com/EnterpriseDB/pg_failover_slots/archive/refs/tags/v${PGFAILOVERSLOTS_VERSION}.tar.gz" \
       wal2json "${WAL2JSON_VERSION}.0" BSD-3-Clause wal2json:wal2json "https://github.com/eulerto/wal2json/archive/refs/tags/wal2json_${WAL2JSON_VERSION//./_}.tar.gz" \
-    | write-spdx /opt/bitnami/postgresql/.spdx-postgresql.spdx "PostgreSQL ${POSTGRESQL_VERSION}.0" "$TARGETARCH" \
- && ln -s /opt/bitnami/postgresql/.spdx-postgresql.spdx /opt/bitnami/postgresql/.spdx-postgresql.json \
+    | write-spdx /opt/bitnami/postgresql/.spdx-postgresql-repmgr.spdx "PostgreSQL ${POSTGRESQL_VERSION}.0" "$TARGETARCH" \
+ && ln -s /opt/bitnami/postgresql/.spdx-postgresql-repmgr.spdx /opt/bitnami/postgresql/.spdx-postgresql-repmgr.json \
  && printf '%s\t%s\t%s\t%s\t%s\n' \
       nss-wrapper "$NSSWRAPPER_VERSION" BSD-3-Clause nss-wrapper:nss-wrapper "https://ftp.samba.org/pub/cwrap/nss_wrapper-${NSSWRAPPER_VERSION}.tar.gz" \
     | write-spdx /opt/bitnami/common/.spdx-nss-wrapper.spdx "NSS Wrapper ${NSSWRAPPER_VERSION}" "$TARGETARCH" \
@@ -326,10 +353,10 @@ ARG POSTGRESQL_VERSION IMAGE_REVISION
 ARG DEBIAN_REFRESH
 
 LABEL org.opencontainers.image.base.name="docker.io/library/debian:bookworm-slim" \
-      org.opencontainers.image.description="PostgreSQL built from upstream source with the layout of Bitnami's postgresql image. Not affiliated with Broadcom or Bitnami." \
-      org.opencontainers.image.licenses="Apache-2.0 AND PostgreSQL AND GPL-2.0-or-later" \
+      org.opencontainers.image.description="PostgreSQL with repmgr, built from upstream source with the layout of Bitnami's postgresql-repmgr image. Not affiliated with Broadcom or Bitnami." \
+      org.opencontainers.image.licenses="Apache-2.0 AND PostgreSQL AND GPL-2.0-or-later AND GPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/intikhab49/lifeboat" \
-      org.opencontainers.image.title="postgresql" \
+      org.opencontainers.image.title="postgresql-repmgr" \
       org.opencontainers.image.version="${POSTGRESQL_VERSION}.0"
 
 ENV HOME="/" \
@@ -337,10 +364,10 @@ ENV HOME="/" \
     OS_FLAVOUR="debian-12" \
     OS_NAME="linux"
 
-COPY images/postgresql/17/debian-12/prebuildfs /
+COPY images/postgresql-repmgr/18/debian-12/prebuildfs /
 SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
 # Install required system packages and dependencies
-RUN install_packages ca-certificates curl libbsd0 libbz2-1.0 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libhogweed6 libicu72 libidn2-0 libldap-2.5-0 liblz4-1 liblzma5 libmd0 libnettle8 libp11-kit0 libpcre3 libreadline8 libsasl2-2 libsqlite3-0 libssl3 libstdc++6 libtasn1-6 libtinfo6 libunistring2 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g
+RUN install_packages ca-certificates curl libbrotli1 libbsd0 libbz2-1.0 libcom-err2 libcurl4 libedit2 libffi8 libgcc-s1 libgmp10 libgnutls30 libgssapi-krb5-2 libhogweed6 libicu72 libidn2-0 libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0 libldap-2.5-0 liblz4-1 liblzma5 libmd0 libnettle8 libnghttp2-14 libp11-kit0 libpcre3 libpsl5 libreadline8 librtmp1 libsasl2-2 libsqlite3-0 libssh2-1 libssl3 libstdc++6 libtasn1-6 libtinfo6 libunistring2 libuuid1 libxml2 libxslt1.1 libzstd1 locales procps zlib1g
 COPY --from=assemble /opt/bitnami /opt/bitnami
 RUN apt-get update && apt-get upgrade -y && \
     apt-get clean && rm -rf /var/lib/apt/lists /var/cache/apt/archives
@@ -349,26 +376,25 @@ RUN find / -perm /6000 -type f -exec chmod a-s {} \; || true
 RUN update-locale LANG=C.UTF-8 LC_MESSAGES=POSIX && \
     DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales && \
     echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+RUN echo 'en_GB.UTF-8 UTF-8' >> /etc/locale.gen
 RUN /opt/bitnami/scripts/locales/generate-locales.sh
 RUN uninstall_packages curl
 
-COPY images/postgresql/17/debian-12/rootfs /
+COPY images/postgresql-repmgr/18/debian-12/rootfs /
 # Deviation: the startup banner names this image instead of claiming to be Bitnami's.
 RUN sed -i 's|Welcome to the Bitnami ${BITNAMI_APP_NAME} container|lifeboat ${BITNAMI_APP_NAME}, built from upstream source (not affiliated with Broadcom or Bitnami)|' \
       /opt/bitnami/scripts/libbitnami.sh \
- && /opt/bitnami/scripts/postgresql/postunpack.sh
+ && /opt/bitnami/scripts/postgresql-repmgr/postunpack.sh
 ENV APP_VERSION="${POSTGRESQL_VERSION}.0" \
-    BITNAMI_APP_NAME="postgresql" \
+    BITNAMI_APP_NAME="postgresql-repmgr" \
     IMAGE_REVISION="${IMAGE_REVISION}" \
     LANG="en_US.UTF-8" \
     LANGUAGE="en_US:en" \
     NSS_WRAPPER_LIB="/opt/bitnami/common/lib/libnss_wrapper.so" \
-    PATH="/opt/bitnami/common/bin:/opt/bitnami/postgresql/bin:$PATH"
-
-VOLUME [ "/bitnami/postgresql", "/docker-entrypoint-initdb.d", "/docker-entrypoint-preinitdb.d" ]
+    PATH="/opt/bitnami/common/bin:/opt/bitnami/repmgr/bin:/opt/bitnami/postgresql/bin:$PATH"
 
 EXPOSE 5432
 
 USER 1001
-ENTRYPOINT [ "/opt/bitnami/scripts/postgresql/entrypoint.sh" ]
-CMD [ "/opt/bitnami/scripts/postgresql/run.sh" ]
+ENTRYPOINT [ "/opt/bitnami/scripts/postgresql-repmgr/entrypoint.sh" ]
+CMD [ "/opt/bitnami/scripts/postgresql-repmgr/run.sh" ]
