@@ -14,7 +14,7 @@ jobs:
   postgresql-18:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Sync with Bitnami's latest releases
         id: sync
@@ -69,7 +69,7 @@ jobs:
   postgresql-minor:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Move 17 and 16 to PostgreSQL's latest minors
         id: bump
